@@ -1,0 +1,13 @@
+{
+  "permission": {
+    "bash": {
+      "*": "deny",
+      "pwd *": "ask",
+      "ls *": "allow",
+      "git *": "ask"
+    },
+    "webfetch": "ask",
+    "websearch": "deny",
+    "interactive_bash": "deny"
+  }
+}

@@ -1,3 +1,7 @@
+.omx
+.codex
+prompt-logs/
+
 .DS_Store
 node_modules
 .worktrees
