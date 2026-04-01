@@ -1,3 +1,7 @@
+.omx
+.codex
+prompt-logs/
+
 .DS_Store
 node_modules
 .worktrees
@@ -27,5 +31,6 @@ target
 opencode-dev
 UPCOMING_CHANGELOG.md
 logs/
+.opencode/compliance-log/
 *.bun-build
 tsconfig.tsbuildinfo
