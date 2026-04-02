@@ -31,5 +31,6 @@ target
 opencode-dev
 UPCOMING_CHANGELOG.md
 logs/
+.opencode/compliance-log/
 *.bun-build
 tsconfig.tsbuildinfo
