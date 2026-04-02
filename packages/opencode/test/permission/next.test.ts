@@ -1,6 +1,7 @@
 import { afterEach, test, expect } from "bun:test"
 import os from "os"
 import { Bus } from "../../src/bus"
+import { Compliance } from "../../src/permission/compliance"
 import { Permission } from "../../src/permission"
 import { PermissionID } from "../../src/permission/schema"
 import { Instance } from "../../src/project/instance"
@@ -367,6 +368,16 @@ test("evaluate - merges multiple rulesets", () => {
   expect(result.action).toBe("deny")
 })
 
+test("compliance ruleset matches shipped bash policy", () => {
+  expect(Permission.evaluate("bash", "git status", Compliance.ruleset()).action).toBe("ask")
+  expect(Permission.evaluate("bash", "npm install", Compliance.ruleset()).action).toBe("deny")
+  expect(Permission.evaluate("bash", "grep foo", Compliance.ruleset()).action).toBe("deny")
+  expect(Permission.evaluate("bash", "rm -rf /", Compliance.ruleset()).action).toBe("deny")
+  expect(Permission.evaluate("bash", "echo hello", Compliance.ruleset()).action).toBe("deny")
+  expect(Permission.evaluate("webfetch", "*", Compliance.ruleset()).action).toBe("ask")
+  expect(Permission.evaluate("websearch", "*", Compliance.ruleset()).action).toBe("deny")
+})
+
 // disabled tests
 
 test("disabled - returns empty set when all tools allowed", () => {
@@ -476,6 +487,26 @@ test("disabled - specific allow overrides wildcard deny", () => {
   expect(result.has("read")).toBe(true)
 })
 
+test("disabled - compliance deny disables websearch without user rules", () => {
+  const result = Permission.disabled(["websearch"], [])
+  expect(result.has("websearch")).toBe(true)
+})
+
+test("disabled - compliance default deny with exceptions does not disable bash", () => {
+  const result = Permission.disabled(["bash"], [])
+  expect(result.has("bash")).toBe(false)
+})
+
+test("disabled - compliance deny beats local allow for websearch", () => {
+  const result = Permission.disabled(["websearch"], [{ permission: "websearch", pattern: "*", action: "allow" }])
+  expect(result.has("websearch")).toBe(true)
+})
+
+test("disabled - compliance ask does not disable webfetch", () => {
+  const result = Permission.disabled(["webfetch"], [{ permission: "webfetch", pattern: "*", action: "allow" }])
+  expect(result.has("webfetch")).toBe(false)
+})
+
 // ask tests
 
 test("ask - resolves immediately when action is allow", async () => {
@@ -485,11 +516,11 @@ test("ask - resolves immediately when action is allow", async () => {
     fn: async () => {
       const result = await Permission.ask({
         sessionID: SessionID.make("session_test"),
-        permission: "bash",
-        patterns: ["ls"],
+        permission: "read",
+        patterns: ["foo.ts"],
         metadata: {},
         always: [],
-        ruleset: [{ permission: "bash", pattern: "*", action: "allow" }],
+        ruleset: [{ permission: "read", pattern: "*", action: "allow" }],
       })
       expect(result).toBeUndefined()
     },
@@ -571,6 +602,123 @@ test("ask - adds request to pending list", async () => {
 
       await rejectAll()
       await ask.catch(() => {})
+    },
+  })
+})
+
+test("ask - compliance ask overrides user allow", async () => {
+  await using tmp = await tmpdir({ git: true })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const ask = Permission.ask({
+        sessionID: SessionID.make("session_test"),
+        permission: "bash",
+        patterns: ["git status"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "allow" }],
+      })
+
+      expect(await waitForPending(1)).toHaveLength(1)
+      await rejectAll()
+      await ask.catch(() => {})
+    },
+  })
+})
+
+test("ask - compliance deny overrides user allow", async () => {
+  await using tmp = await tmpdir({ git: true })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      await expect(
+        Permission.ask({
+          sessionID: SessionID.make("session_test"),
+          permission: "bash",
+          patterns: ["rm -rf /"],
+          metadata: {},
+          always: [],
+          ruleset: [{ permission: "bash", pattern: "*", action: "allow" }],
+        }),
+      ).rejects.toBeInstanceOf(Permission.DeniedError)
+    },
+  })
+})
+
+test("ask - user deny remains stronger than compliance allow", async () => {
+  await using tmp = await tmpdir({ git: true })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      await expect(
+        Permission.ask({
+          sessionID: SessionID.make("session_test"),
+          permission: "bash",
+          patterns: ["git status"],
+          metadata: {},
+          always: [],
+          ruleset: [{ permission: "bash", pattern: "git *", action: "deny" }],
+        }),
+      ).rejects.toBeInstanceOf(Permission.DeniedError)
+    },
+  })
+})
+
+test("ask - compliance ask overrides user allow for webfetch", async () => {
+  await using tmp = await tmpdir({ git: true })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const ask = Permission.ask({
+        sessionID: SessionID.make("session_test"),
+        permission: "webfetch",
+        patterns: ["https://example.com"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "webfetch", pattern: "*", action: "allow" }],
+      })
+
+      expect(await waitForPending(1)).toHaveLength(1)
+      await rejectAll()
+      await ask.catch(() => {})
+    },
+  })
+})
+
+test("ask - compliance deny overrides user allow for websearch", async () => {
+  await using tmp = await tmpdir({ git: true })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      await expect(
+        Permission.ask({
+          sessionID: SessionID.make("session_test"),
+          permission: "websearch",
+          patterns: ["latest news"],
+          metadata: {},
+          always: [],
+          ruleset: [{ permission: "websearch", pattern: "*", action: "allow" }],
+        }),
+      ).rejects.toBeInstanceOf(Permission.DeniedError)
+    },
+  })
+})
+
+test("ask - non-bash permissions are unchanged", async () => {
+  await using tmp = await tmpdir({ git: true })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const result = await Permission.ask({
+        sessionID: SessionID.make("session_test"),
+        permission: "read",
+        patterns: ["foo.ts"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "read", pattern: "*", action: "allow" }],
+      })
+      expect(result).toBeUndefined()
     },
   })
 })
@@ -707,10 +855,10 @@ test("reply - always persists approval and resolves", async () => {
       const askPromise = Permission.ask({
         id: PermissionID.make("per_test3"),
         sessionID: SessionID.make("session_test"),
-        permission: "bash",
-        patterns: ["ls"],
+        permission: "read",
+        patterns: ["foo.ts"],
         metadata: {},
-        always: ["ls"],
+        always: ["foo.ts"],
         ruleset: [],
       })
 
@@ -731,13 +879,97 @@ test("reply - always persists approval and resolves", async () => {
       // Stored approval should allow without asking
       const result = await Permission.ask({
         sessionID: SessionID.make("session_test2"),
-        permission: "bash",
-        patterns: ["ls"],
+        permission: "read",
+        patterns: ["foo.ts"],
         metadata: {},
         always: [],
         ruleset: [],
       })
       expect(result).toBeUndefined()
+    },
+  })
+})
+
+test("reply - always approval cannot exceed compliance ask", async () => {
+  await using tmp = await tmpdir({ git: true })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const ask = Permission.ask({
+        id: PermissionID.make("per_git"),
+        sessionID: SessionID.make("session_test"),
+        permission: "bash",
+        patterns: ["git status"],
+        metadata: {},
+        always: ["git *"],
+        ruleset: [],
+      })
+
+      await waitForPending(1)
+      await Permission.reply({
+        requestID: PermissionID.make("per_git"),
+        reply: "always",
+      })
+      await expect(ask).resolves.toBeUndefined()
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const ask = Permission.ask({
+        sessionID: SessionID.make("session_test_2"),
+        permission: "bash",
+        patterns: ["git status"],
+        metadata: {},
+        always: [],
+        ruleset: [],
+      })
+
+      expect(await waitForPending(1)).toHaveLength(1)
+      await rejectAll()
+      await ask.catch(() => {})
+    },
+  })
+})
+
+test("reply - always approval cannot exceed compliance deny", async () => {
+  await using tmp = await tmpdir({ git: true })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const ask = Permission.ask({
+        id: PermissionID.make("per_any"),
+        sessionID: SessionID.make("session_test"),
+        permission: "bash",
+        patterns: ["git status"],
+        metadata: {},
+        always: ["*"],
+        ruleset: [],
+      })
+
+      await waitForPending(1)
+      await Permission.reply({
+        requestID: PermissionID.make("per_any"),
+        reply: "always",
+      })
+      await expect(ask).resolves.toBeUndefined()
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      await expect(
+        Permission.ask({
+          sessionID: SessionID.make("session_test_2"),
+          permission: "bash",
+          patterns: ["rm -rf /"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        }),
+      ).rejects.toBeInstanceOf(Permission.DeniedError)
     },
   })
 })
@@ -794,18 +1026,18 @@ test("reply - always resolves matching pending requests in same session", async 
       const a = Permission.ask({
         id: PermissionID.make("per_test5a"),
         sessionID: SessionID.make("session_same"),
-        permission: "bash",
-        patterns: ["ls"],
+        permission: "read",
+        patterns: ["foo.ts"],
         metadata: {},
-        always: ["ls"],
+        always: ["foo.ts"],
         ruleset: [],
       })
 
       const b = Permission.ask({
         id: PermissionID.make("per_test5b"),
         sessionID: SessionID.make("session_same"),
-        permission: "bash",
-        patterns: ["ls"],
+        permission: "read",
+        patterns: ["foo.ts"],
         metadata: {},
         always: [],
         ruleset: [],
@@ -833,18 +1065,18 @@ test("reply - always keeps other session pending", async () => {
       const a = Permission.ask({
         id: PermissionID.make("per_test6a"),
         sessionID: SessionID.make("session_a"),
-        permission: "bash",
-        patterns: ["ls"],
+        permission: "read",
+        patterns: ["foo.ts"],
         metadata: {},
-        always: ["ls"],
+        always: ["foo.ts"],
         ruleset: [],
       })
 
       const b = Permission.ask({
         id: PermissionID.make("per_test6b"),
         sessionID: SessionID.make("session_b"),
-        permission: "bash",
-        patterns: ["ls"],
+        permission: "read",
+        patterns: ["foo.ts"],
         metadata: {},
         always: [],
         ruleset: [],
@@ -1079,7 +1311,7 @@ test("ask - allows all patterns when all match allow rules", async () => {
       const result = await Permission.ask({
         sessionID: SessionID.make("session_test"),
         permission: "bash",
-        patterns: ["echo hello", "ls -la", "pwd"],
+        patterns: ["ls -la", "ls src"],
         metadata: {},
         always: [],
         ruleset: [{ permission: "bash", pattern: "*", action: "allow" }],

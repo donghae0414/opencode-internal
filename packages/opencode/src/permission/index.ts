@@ -13,6 +13,7 @@ import { Wildcard } from "@/util/wildcard"
 import { Deferred, Effect, Layer, Schema, ServiceMap } from "effect"
 import os from "os"
 import z from "zod"
+import { Compliance } from "./compliance"
 import { evaluate as evalRule } from "./evaluate"
 import { PermissionID } from "./schema"
 
@@ -135,6 +136,14 @@ export namespace Permission {
     return evalRule(permission, pattern, ...rulesets)
   }
 
+  function effective(permission: string, pattern: string, ...rulesets: Ruleset[]) {
+    return Compliance.restrict(evaluate(permission, pattern, ...rulesets), permission, pattern)
+  }
+
+  function relevant(permission: string, ...rulesets: ReadonlyArray<Rule>[]) {
+    return rulesets.flat().filter((rule) => Wildcard.match(permission, rule.permission))
+  }
+
   export class Service extends ServiceMap.Service<Service, Interface>()("@opencode/Permission") {}
 
   export const layer = Layer.effect(
@@ -169,11 +178,11 @@ export namespace Permission {
         let needsAsk = false
 
         for (const pattern of request.patterns) {
-          const rule = evaluate(request.permission, pattern, ruleset, approved)
+          const rule = effective(request.permission, pattern, ruleset, approved)
           log.info("evaluated", { permission: request.permission, pattern, action: rule })
           if (rule.action === "deny") {
             return yield* new DeniedError({
-              ruleset: ruleset.filter((rule) => Wildcard.match(request.permission, rule.permission)),
+              ruleset: relevant(request.permission, ruleset, approved, Compliance.ruleset()),
             })
           }
           if (rule.action === "allow") continue
@@ -245,7 +254,7 @@ export namespace Permission {
         for (const [id, item] of pending.entries()) {
           if (item.info.sessionID !== existing.info.sessionID) continue
           const ok = item.info.patterns.every(
-            (pattern) => evaluate(item.info.permission, pattern, approved).action === "allow",
+            (pattern) => effective(item.info.permission, pattern, approved).action === "allow",
           )
           if (!ok) continue
           pending.delete(id)
@@ -299,6 +308,10 @@ export namespace Permission {
     const result = new Set<string>()
     for (const tool of tools) {
       const permission = EDIT_TOOLS.includes(tool) ? "edit" : tool
+      if (Compliance.disables(permission)) {
+        result.add(tool)
+        continue
+      }
       const rule = ruleset.findLast((rule) => Wildcard.match(permission, rule.permission))
       if (!rule) continue
       if (rule.pattern === "*" && rule.action === "deny") result.add(tool)
