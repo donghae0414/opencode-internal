@@ -154,7 +154,10 @@ const allTargets: {
   },
 ]
 
-const targets = singleFlag
+const winOnlyFlag = process.argv.includes("--win")
+const targets = winOnlyFlag
+  ? allTargets.filter((item) => item.os === "win32")
+  : singleFlag
   ? allTargets.filter((item) => {
       if (item.os !== process.platform || item.arch !== process.arch) {
         return false
