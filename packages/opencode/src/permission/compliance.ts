@@ -1,4 +1,3 @@
-import type { Config } from "@/config/config"
 import os from "os"
 import { Wildcard } from "@/util/wildcard"
 import z from "zod"
@@ -31,7 +30,7 @@ function expand(pattern: string) {
   return pattern
 }
 
-function fromConfig(permission: Config.Permission) {
+function fromConfig(permission: z.infer<typeof Root>["permission"]) {
   const rules: Rule[] = []
   for (const [key, value] of Object.entries(permission)) {
     if (typeof value === "string") {

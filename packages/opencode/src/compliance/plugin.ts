@@ -1,5 +1,5 @@
 import type { Hooks, PluginInput } from "@opencode-ai/plugin"
-import { Log } from "@/util/log"
+import * as Log from "@opencode-ai/core/util/log"
 import { write } from "./writer"
 
 const log = Log.create({ service: "compliance" })
